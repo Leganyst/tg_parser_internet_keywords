@@ -4,18 +4,15 @@ ARG UID=1000
 ARG GID=1000
 
 RUN addgroup --gid $GID appgroup && \
-    adduser --disabled-password --gecos '' --uid $UID --gid $GID appuser && \
-    apt-get update && apt-get install -y su-exec && rm -rf /var/lib/apt/lists/*
+    adduser --disabled-password --gecos '' --uid $UID --gid $GID appuser
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# Не копируем исходники, они будут проброшены volume
 
-USER root
+USER appuser
 
-ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "main.py"]
