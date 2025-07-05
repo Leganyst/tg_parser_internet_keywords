@@ -13,4 +13,4 @@ COPY src/keywords.txt ./src/keywords.txt
 # Для userbot: пробрасываем сессию наружу (чтобы не терялась при пересборке)
 VOLUME ["/app"]
 
-CMD ["python", "-m", "src.main"]
+CMD ["python", "main.py"]
