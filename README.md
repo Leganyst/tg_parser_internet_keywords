@@ -21,13 +21,13 @@ Userbot на Pyrogram для мониторинга ключевых слов в
 3. Добавьте ключевые слова в `src/keywords.txt` (по одному на строку).
 4. Соберите и запустите Docker:
    ```sh
-   docker build -t parse_intertet_words .
+   docker build -t parse_internet_words .
    docker run --rm -it \
      -v $(pwd)/src:/app/src \
      -v $(pwd)/src/keywords.txt:/app/src/keywords.txt \
      -v $(pwd)/userbot.session:/app/userbot.session \
      --env-file .env \
-     parse_intertet_words
+     parse_internet_words
    ```
    > При первом запуске потребуется ввести код из Telegram для авторизации userbot.
 
