@@ -5,6 +5,7 @@ from src.keywords import load_keywords, add_keyword, remove_keyword
 from src.utils import find_match
 import sys
 import logging
+import os
 
 logger.remove()
 logger.add(sys.stdout, level="DEBUG", format="[{time:YYYY-MM-DD HH:mm:ss}] [{level}] {message}")
@@ -12,9 +13,12 @@ logger.add(sys.stdout, level="DEBUG", format="[{time:YYYY-MM-DD HH:mm:ss}] [{lev
 KEYWORDS = load_keywords(KEYWORDS_FILE)
 MONITORED_CHAT_IDS = [] 
 
+SESSION_FOLDER = os.path.join(os.getcwd(), "sessions")
+os.makedirs(SESSION_FOLDER, exist_ok=True)
+
 
 app = Client(
-    name="/app/sessions/userbot",
+    name=os.path.join(SESSION_FOLDER, "userbot"),
     api_id=API_ID,
     api_hash=API_HASH
 )
