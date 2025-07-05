@@ -19,21 +19,16 @@ Userbot на Pyrogram для мониторинга ключевых слов в
    - Для userbot BOT_TOKEN не нужен, но может быть в .env — он игнорируется.
    - Укажите KEYWORDS_FILE=src/keywords.txt
 3. Добавьте ключевые слова в `src/keywords.txt` (по одному на строку).
-4. Соберите и запустите Docker:
+4. Запуск через Docker Compose (рекомендуется, не нужно возиться с правами и копированием файлов):
    ```sh
-   docker build -t parse_internet_words .
-   docker run --rm -it \
-     -v $(pwd)/src:/app/src \
-     -v $(pwd)/src/keywords.txt:/app/src/keywords.txt \
-     -v $(pwd)/userbot.session:/app/userbot.session \
-     --env-file .env \
-     parse_internet_words
+   docker compose up --build
    ```
+   > Все файлы (включая userbot.session) будут храниться в вашей директории, права пользователя совпадают с вашим UID/GID.
    > При первом запуске потребуется ввести код из Telegram для авторизации userbot.
 
 5. Для запуска без Docker:
    ```sh
-   python -m src.main
+   python main.py
    ```
 
 ## Структура

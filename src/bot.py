@@ -1,8 +1,8 @@
 from pyrogram import Client, filters
 from loguru import logger
-from .config import API_ID, API_HASH, OWNER_ID, KEYWORDS_FILE, FUZZY_THRESHOLD
-from .keywords import load_keywords, add_keyword, remove_keyword
-from .utils import find_match
+from src.config import API_ID, API_HASH, OWNER_ID, KEYWORDS_FILE, FUZZY_THRESHOLD
+from src.keywords import load_keywords, add_keyword, remove_keyword
+from src.utils import find_match
 import sys
 import logging
 

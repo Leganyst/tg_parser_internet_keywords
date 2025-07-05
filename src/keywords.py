@@ -1,4 +1,4 @@
-from .config import *
+from src.config import *
 
 def load_keywords(filepath="keywords.txt"):
     try:

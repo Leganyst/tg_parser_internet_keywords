@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  userbot:
+    build: .
+    volumes:
+      - ./:/app
+    environment:
+      - UID=${UID:-1000}
+      - GID=${GID:-1000}
+    command: python main.py
+    tty: true

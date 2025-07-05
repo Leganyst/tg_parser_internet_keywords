@@ -1,15 +1,18 @@
 FROM python:3.11-slim
 
+ARG UID=1000
+ARG GID=1000
+
+RUN addgroup --gid $GID appgroup && \
+    adduser --disabled-password --gecos '' --uid $UID --gid $GID appuser
+
 WORKDIR /app
 
-# Установка зависимостей
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем исходники
-COPY . .
+# Не копируем исходники, они будут проброшены volume
 
-# Для userbot: пробрасываем сессию наружу (чтобы не терялась при пересборке)
-VOLUME ["/app"]
+USER appuser
 
 CMD ["python", "main.py"]
