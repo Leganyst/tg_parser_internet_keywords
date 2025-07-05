@@ -1,4 +1,4 @@
-# parse_intertet_words
+# parse_internet_words
 
 Userbot на Pyrogram для мониторинга ключевых слов в любых чатах Telegram.
 
