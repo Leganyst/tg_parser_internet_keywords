@@ -15,6 +15,7 @@ MONITORED_CHAT_IDS = []
 
 app = Client(
     "userbot",
+    workdir="/app",
     api_id=API_ID,
     api_hash=API_HASH
 )
