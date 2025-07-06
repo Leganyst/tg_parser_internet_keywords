@@ -2,7 +2,8 @@ from pyrogram import Client, filters
 from loguru import logger
 from src.config import API_ID, API_HASH, OWNER_ID, KEYWORDS_FILE, FUZZY_THRESHOLD
 from src.keywords import load_keywords, add_keyword, remove_keyword
-from src.utils import find_match
+from src.utils import enhanced_find_match, smart_find_match, analyze_match_quality
+from src.quality_monitor import quality_logger
 import sys
 import logging
 import os
@@ -198,11 +199,15 @@ def help_self_handler(client, message):
     """
     help_text = (
         "Userbot: управление ключевыми словами через команды в избранных (Saved Messages) или в личке от себя.\n\n"
+        "📝 Управление ключевыми словами:\n"
         "/addword <слово> — добавить ключ\n"
         "/delword <слово> — удалить ключ\n"
         "/addwords <слово1, слово2, ...> — добавить сразу несколько ключей (через запятую или с новой строки)\n"
         "/delwords <слово1, слово2, ...> — удалить сразу несколько ключей (через запятую или с новой строки)\n"
-        "/showwords — показать все ключи\n"
+        "/showwords — показать все ключи\n\n"
+        "📊 Мониторинг качества:\n"
+        "/stats — показать статистику качества совпадений\n"
+        "/clear_stats — очистить статистику\n\n"
         "/help — эта справка\n\n"
         "Пример: /addwords интернет, лаги, нет связи\n"
         "Или:\n/addwords\nинтернет\nлаги\nнет связи\n"
@@ -210,7 +215,43 @@ def help_self_handler(client, message):
     )
     message.reply_text(help_text)
 
+@app.on_message(filters.command(["stats", "quality"]) & filters.private & filters.me)
+def stats_handler(client, message):
+    """
+    Показать статистику качества совпадений
+    """
+    from src.quality_monitor import create_quality_report
+    
+    try:
+        report = create_quality_report()
+        
+        # Разбиваем длинный отчет на части, если нужно
+        if len(report) > 4000:
+            parts = [report[i:i+4000] for i in range(0, len(report), 4000)]
+            for i, part in enumerate(parts):
+                if i == 0:
+                    message.reply_text(f"📊 Статистика качества (часть {i+1}/{len(parts)}):\n\n{part}")
+                else:
+                    message.reply_text(f"📊 Статистика качества (часть {i+1}/{len(parts)}):\n\n{part}")
+        else:
+            message.reply_text(f"📊 Статистика качества:\n\n{report}")
+            
+    except Exception as e:
+        message.reply_text(f"Ошибка при генерации статистики: {str(e)}")
 
+@app.on_message(filters.command("clear_stats") & filters.private & filters.me)
+def clear_stats_handler(client, message):
+    """
+    Очистить статистику качества
+    """
+    import os
+    
+    log_file = "match_quality.log"
+    if os.path.exists(log_file):
+        os.remove(log_file)
+        message.reply_text("📊 Статистика качества очищена.")
+    else:
+        message.reply_text("📊 Файл статистики не найден.")
 
 @app.on_message(filters.text)
 def all_messages_handler(client, message):
@@ -221,16 +262,30 @@ def all_messages_handler(client, message):
     
     KEYWORDS = load_keywords(KEYWORDS_FILE)
     text = message.text or ""
-    # Новый вызов: используем строгий режим через regex
-    matched = find_match(text, KEYWORDS, FUZZY_THRESHOLD, use_regex=True, ignore_case=True)
+    
+    # Используем умный поиск с учетом контекста
+    matched = smart_find_match(text, KEYWORDS, threshold=FUZZY_THRESHOLD)
+    
     if matched:
-        logger.info(f"Совпадение: '{matched}' в чате {message.chat.id} ({message.chat.type})")
+        # Анализируем качество совпадения
+        quality_metrics = analyze_match_quality(text, matched)
+        
+        # Логируем для мониторинга качества
+        quality_logger.log_match(text, matched, quality_metrics, is_false_positive=False)
+        
+        logger.info(f"Совпадение: '{matched}' в чате {message.chat.id} ({message.chat.type}) "
+                   f"[качество: {quality_metrics['confidence'] if quality_metrics else 'unknown'}]")
+        
         notify_text = (
             f"🔔 Совпадение по ключу: '{matched}'\n"
             f"Чат: {message.chat.title or message.chat.id} ({message.chat.type})\n"
             f"Пользователь: {message.from_user.first_name if message.from_user else 'N/A'}\n"
             f"Текст:\n{text[:500]}"
         )
+        
+        # Добавляем информацию о качестве совпадения (опционально)
+        if quality_metrics and quality_metrics['confidence'] == 'low':
+            notify_text += f"\n⚠️ Низкая уверенность в совпадении"
         # Для супергрупп — ссылка на сообщение (только если есть message.id)
         if str(message.chat.id).startswith("-100") and hasattr(message, "id"):
             chat_id_num = str(message.chat.id)[4:]
