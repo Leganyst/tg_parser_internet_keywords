@@ -74,15 +74,29 @@ def del_word_handler(client, message):
 @app.on_message(filters.command("showwords") & filters.create(owner_filter))
 def show_words_handler(client, message):
     logger.info(f"/showwords от {message.from_user.id if message.from_user else 'N/A'}")
-    keywords = load_keywords("keywords.txt")
+    keywords = load_keywords(KEYWORDS_FILE)
     if not keywords:
         message.reply_text("Список ключей пуст.")
         return
-    text = "\n".join(keywords)
-    if len(text) > 4000:
-        message.reply_text("Список слишком длинный для вывода.")
+    
+    # Формируем красивый список с нумерацией
+    text_lines = [f"{i+1}. {keyword}" for i, keyword in enumerate(keywords)]
+    full_text = f"📝 Список ключевых слов ({len(keywords)} шт.):\n\n" + "\n".join(text_lines)
+    
+    # Если текст слишком длинный, разбиваем на части
+    if len(full_text) > 4000:
+        # Отправляем заголовок
+        message.reply_text(f"📝 Список ключевых слов ({len(keywords)} шт.):")
+        
+        # Разбиваем на части по 50 ключевых слов
+        chunk_size = 50
+        for i in range(0, len(keywords), chunk_size):
+            chunk = keywords[i:i+chunk_size]
+            chunk_lines = [f"{i+j+1}. {keyword}" for j, keyword in enumerate(chunk)]
+            chunk_text = f"Часть {i//chunk_size + 1}:\n" + "\n".join(chunk_lines)
+            message.reply_text(chunk_text)
     else:
-        message.reply_text(text)
+        message.reply_text(full_text)
 
 @app.on_message(filters.command(["addword", "addkey"]) & filters.private & filters.me)
 def add_word_self_handler(client, message):
@@ -125,11 +139,25 @@ def show_words_self_handler(client, message):
     if not keywords:
         message.reply_text("Список ключей пуст.")
         return
-    text = "\n".join(keywords)
-    if len(text) > 4000:
-        message.reply_text("Список слишком длинный для вывода.")
+    
+    # Формируем красивый список с нумерацией
+    text_lines = [f"{i+1}. {keyword}" for i, keyword in enumerate(keywords)]
+    full_text = f"📝 Список ключевых слов ({len(keywords)} шт.):\n\n" + "\n".join(text_lines)
+    
+    # Если текст слишком длинный, разбиваем на части
+    if len(full_text) > 4000:
+        # Отправляем заголовок
+        message.reply_text(f"📝 Список ключевых слов ({len(keywords)} шт.):")
+        
+        # Разбиваем на части по 50 ключевых слов
+        chunk_size = 50
+        for i in range(0, len(keywords), chunk_size):
+            chunk = keywords[i:i+chunk_size]
+            chunk_lines = [f"{i+j+1}. {keyword}" for j, keyword in enumerate(chunk)]
+            chunk_text = f"Часть {i//chunk_size + 1}:\n" + "\n".join(chunk_lines)
+            message.reply_text(chunk_text)
     else:
-        message.reply_text(text)
+        message.reply_text(full_text)
 
 @app.on_message(filters.command(["addwords", "addkeys"]) & filters.private & filters.me)
 def add_words_bulk_handler(client, message):
