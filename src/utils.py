@@ -1,4 +1,5 @@
 import re
+import pymorphy2
 from .keywords import load_keywords
 from rapidfuzz import fuzz, process
 from .morphology_config import (
