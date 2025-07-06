@@ -221,7 +221,8 @@ def all_messages_handler(client, message):
     
     KEYWORDS = load_keywords(KEYWORDS_FILE)
     text = message.text or ""
-    matched = find_match(text, KEYWORDS, FUZZY_THRESHOLD)
+    # Новый вызов: используем строгий режим через regex
+    matched = find_match(text, KEYWORDS, FUZZY_THRESHOLD, use_regex=True, ignore_case=True)
     if matched:
         logger.info(f"Совпадение: '{matched}' в чате {message.chat.id} ({message.chat.type})")
         notify_text = (
