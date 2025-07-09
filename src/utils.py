@@ -9,7 +9,7 @@ from src.config import KEYWORDS_FILE  # используем конфиг для
 nlp = spacy.load("ru_core_news_sm")
 
 
-def simple_keyword_match(text: str, fuzz_threshold: int = 90) -> str | None:
+def simple_keyword_match(text: str, fuzz_threshold: int = 90) -> list[str] | None:
     """
     Поиск ключевого слова с использованием spaCy:
     1) Multi-word: ищет точную последовательность лемм
@@ -35,6 +35,9 @@ def simple_keyword_match(text: str, fuzz_threshold: int = 90) -> str | None:
 
     logger.debug(f"simple_keyword_match: lemmas={lemmas}, fuzz_threshold={fuzz_threshold}")
 
+    # Собираем все найденные ключевые слова
+    matches: set[str] = set()
+
     # 1) Multi-word
     for kw_lem, original in kw_multi:
         if len(kw_lem) > len(lemmas):
@@ -42,22 +45,27 @@ def simple_keyword_match(text: str, fuzz_threshold: int = 90) -> str | None:
         for i in range(len(lemmas) - len(kw_lem) + 1):
             window = tuple(lemmas[i : i + len(kw_lem)])
             if window == kw_lem:
-                logger.info(f"Matched multi-word key '{original}' with lemmas {kw_lem} in window {window}")
-                return original
+                logger.info(f"Found multi-word keyword '{original}' in window {window}")
+                matches.add(original)
 
     # 2) Single-word exact
     for lemma in lemmas:
         if lemma in kw_single:
-            logger.info(f"Matched single-word key '{kw_single[lemma]}' exact lemma '{lemma}'")
-            return kw_single[lemma]
+            original = kw_single[lemma]
+            logger.info(f"Found single-word keyword '{original}' exact match for lemma '{lemma}'")
+            matches.add(original)
 
     # 3) Single-word fuzzy
     for lemma in lemmas:
         for key_lem, original in kw_single.items():
             ratio = fuzz.ratio(lemma, key_lem)
             if ratio >= fuzz_threshold:
-                logger.info(f"Matched fuzzy key '{original}' for lemma '{lemma}' vs key_lemma '{key_lem}', ratio={ratio}")
-                return original
+                logger.info(f"Found fuzzy match keyword '{original}' for lemma '{lemma}' vs key_lemma '{key_lem}', ratio={ratio}")
+                matches.add(original)
 
-    logger.debug(f"No keyword match found for text: '{text}'")
+    # Проверяем количество найденных ключевых слов
+    if len(matches) >= 2:
+        logger.info(f"Total keywords matched: {len(matches)} -> {matches}")
+        return list(matches)
+    logger.debug(f"Недостаточно совпадений ключевых слов ({len(matches)}): {matches}")
     return None

@@ -299,11 +299,12 @@ def register_handlers(app: Client):
         try:
             text = message.text or ""
             # Используем простую функцию поиска
-            matched = simple_keyword_match(text, fuzz_threshold=FUZZY_THRESHOLD)
-            if matched:
-                logger.info(f"Совпадение: '{matched}' в чате {message.chat.id} ({message.chat.type})")
+            matches = simple_keyword_match(text, fuzz_threshold=FUZZY_THRESHOLD)
+            if matches:
+                matches_str = ', '.join(matches)
+                logger.info(f"Совпадение ключей: {matches_str} в чате {message.chat.id} ({message.chat.type})")
                 notify_text = (
-                    f"🔔 Совпадение по ключу: '{matched}'\n"
+                    f"🔔 Совпадение по ключам: {matches_str}\n"
                     f"Чат: {message.chat.title or message.chat.id} ({message.chat.type})\n"
                     f"Пользователь: {message.from_user.first_name if message.from_user else 'N/A'}\n"
                     f"Текст:\n{text[:500]}"
