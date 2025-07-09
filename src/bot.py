@@ -2,7 +2,7 @@ from pyrogram import Client, filters
 from loguru import logger
 from src.config import API_ID, API_HASH, OWNER_ID, KEYWORDS_FILE, FUZZY_THRESHOLD
 from src.keywords import load_keywords, add_keyword, remove_keyword
-from src.utils import load_keyword_weights, weighted_score_match
+from src.utils import simple_keyword_match
 import sys
 import logging
 import os
@@ -256,63 +256,38 @@ def register_handlers(app: Client):
         else:
             await message.reply_text("📊 Файл статистики не найден.")
 
-
     @app.on_message(filters.text)
     async def all_messages_handler(client, message):
-        logger.debug(
-            f"all_messages_handler: chat_id={message.chat.id}, "
-            f"chat_type={message.chat.type}, "
-            f"user_id={getattr(message.from_user, 'id', None)}, "
-            f"text={message.text[:50] if message.text else ''}"
-        )
+        logger.debug(f"all_messages_handler: chat_id={message.chat.id}, chat_type={message.chat.type}, user_id={getattr(message.from_user, 'id', None)}, text={message.text[:50] if message.text else ''}")
         try:
-            # Загружаем веса ключей и фраз
-            KEYWORDS_FILE = "keyword_weights.json"
-            kw_weights, phrase_weights = load_keyword_weights(KEYWORDS_FILE)
-
+            KEYWORDS = load_keywords_safe(KEYWORDS_FILE)
             text = message.text or ""
-            matched, matches = weighted_score_match(
-                text,
-                kw_weights=kw_weights,
-                phrase_weights=phrase_weights,
-                fuzz_thresh=90,
-                score_threshold=5
-            )
-
+            # Используем простую функцию поиска
+            matched = simple_keyword_match(text, KEYWORDS, fuzz_threshold=90)
             if matched:
-                match_list = ", ".join(matches)
-                logger.info(f"Совпадение ({match_list}) в чате {message.chat.id} ({message.chat.type})")
-
+                logger.info(f"Совпадение: '{matched}' в чате {message.chat.id} ({message.chat.type})")
                 notify_text = (
-                    f"🔔 Совпадение по ключам/паттернам: {match_list}\n"
+                    f"🔔 Совпадение по ключу: '{matched}'\n"
                     f"Чат: {message.chat.title or message.chat.id} ({message.chat.type})\n"
                     f"Пользователь: {message.from_user.first_name if message.from_user else 'N/A'}\n"
                     f"Текст:\n{text[:500]}"
                 )
-                # Ссылка на сообщение в приватном чате
                 if str(message.chat.id).startswith("-100") and hasattr(message, "id"):
                     chat_id_num = str(message.chat.id)[4:]
                     notify_text += f"\n[Открыть сообщение](https://t.me/c/{chat_id_num}/{message.id})"
-
                 await client.send_message("me", notify_text, disable_web_page_preview=True)
-
                 try:
                     await client.forward_messages("me", message.chat.id, message.id)
                     logger.debug(f"Переслано сообщение {message.id} из чата {message.chat.id} в избранное.")
                 except ValueError as e:
                     if "Peer id invalid" in str(e):
-                        logger.warning(
-                            f"Ошибка пересылки: Peer id invalid ({message.chat.id}). "
-                            f"Пользователь-бот не в этом чате. {e}"
-                        )
+                        logger.warning(f"Ошибка пересылки: Peer id invalid ({message.chat.id}). Скорее всего, userbot не состоит в этом чате или Pyrogram не видит его в сессии. Пересылка невозможна. Подробнее: {e}")
                     else:
                         logger.warning(f"Ошибка пересылки сообщения: {e}")
                 except Exception as e:
                     logger.warning(f"Неизвестная ошибка пересылки сообщения: {e}")
-
         except Exception as e:
             logger.error(f"Ошибка в обработчике сообщений: {e}")
-
 
     # --- Закомментированные старые функции поиска ---
     # def smart_find_match(text, keywords, context="", threshold=85):
