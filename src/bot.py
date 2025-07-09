@@ -2,8 +2,7 @@ from pyrogram import Client, filters
 from loguru import logger
 from src.config import API_ID, API_HASH, OWNER_ID, KEYWORDS_FILE, FUZZY_THRESHOLD
 from src.keywords import load_keywords, add_keyword, remove_keyword
-from src.utils import enhanced_find_match, smart_find_match, analyze_match_quality
-from src.quality_monitor import quality_logger
+from src.utils import load_keyword_weights, weighted_score_match
 import sys
 import logging
 import os
@@ -19,7 +18,8 @@ def load_keywords_safe(file_path):
         return []
 
 KEYWORDS = load_keywords(KEYWORDS_FILE)
-MONITORED_CHAT_IDS = [] 
+
+PENDING_ACTIONS = {}
 
 # --- Хэндлеры ---
 
@@ -157,67 +157,45 @@ def register_handlers(app: Client):
             await message.reply_text(full_text)
 
     @app.on_message(filters.command(["addwords", "addkeys"]) & filters.private & filters.me)
-    async def add_words_bulk_handler(client, message):
+    async def add_words_init_handler(client, message):
         """
-        Добавить сразу несколько ключевых слов (каждое с новой строки или через запятую).
-        Пример:
-        /addwords
-        слово1
-        слово2
-        слово3
-        или: /addwords слово1, слово2, слово3
+        Инициализация добавления нескольких ключевых слов через FSM
         """
-        text = message.text.split(maxsplit=1)
-        if len(text) < 2:
-            await message.reply_text("Укажите ключевые слова после команды. Можно через запятую или с новой строки.")
-            return
-        words = text[1].replace(",", "\n").splitlines()
+        PENDING_ACTIONS[message.from_user.id] = 'ADD_WORDS'
+        await message.reply_text(
+            "Пришлите ключевые слова для добавления. "
+            "Можно через запятую или каждое с новой строки."
+        )
+
+    @app.on_message(
+        filters.text & filters.private & filters.me &
+        filters.create(lambda _, __, message: PENDING_ACTIONS.get(message.from_user.id) == 'ADD_WORDS')
+    )
+    async def add_words_fsm_handler(client, message):
+        """
+        FSM: обработка добавления нескольких слов
+        """
+        text = message.text
+        words = text.replace(",", "\n").splitlines()
         added, skipped = [], []
-        for word in words:
-            w = word.strip()
-            if w:
-                if add_keyword(w, KEYWORDS_FILE):
-                    added.append(w)
-                else:
-                    skipped.append(w)
+        for w in words:
+            w = w.strip()
+            if not w:
+                continue
+            if add_keyword(w, KEYWORDS_FILE):
+                added.append(w)
+            else:
+                skipped.append(w)
         reply = []
         if added:
             reply.append(f"Добавлены: {', '.join(added)}")
         if skipped:
             reply.append(f"Пропущены (уже есть/пусто): {', '.join(skipped)}")
         await message.reply_text("\n".join(reply) if reply else "Ничего не добавлено.")
+        PENDING_ACTIONS.pop(message.from_user.id, None)
+        # далее сообщение не передаётся другим хэндлерам
 
-    @app.on_message(filters.command(["delwords", "delkeys"]) & filters.private & filters.me)
-    async def del_words_bulk_handler(client, message):
-        """
-        Удалить сразу несколько ключевых слов (каждое с новой строки или через запятую).
-        Пример:
-        /delwords
-        слово1
-        слово2
-        или: /delwords слово1, слово2
-        """
-        text = message.text.split(maxsplit=1)
-        if len(text) < 2:
-            await message.reply_text("Укажите ключевые слова для удаления. Можно через запятую или с новой строки.")
-            return
-        words = text[1].replace(",", "\n").splitlines()
-        removed, not_found = [], []
-        for word in words:
-            w = word.strip()
-            if w:
-                if remove_keyword(w, KEYWORDS_FILE):
-                    removed.append(w)
-                else:
-                    not_found.append(w)
-        reply = []
-        if removed:
-            reply.append(f"Удалены: {', '.join(removed)}")
-        if not_found:
-            reply.append(f"Не найдены: {', '.join(not_found)}")
-        await message.reply_text("\n".join(reply) if reply else "Ничего не удалено.")
-
-    @app.on_message(filters.command(["help", "start"]) & filters.private & filters.me)
+    @app.on_message(filters.command("help") & filters.private & filters.me)
     async def help_self_handler(client, message):
         """
         Справка по командам userbot.
@@ -278,38 +256,70 @@ def register_handlers(app: Client):
         else:
             await message.reply_text("📊 Файл статистики не найден.")
 
+
     @app.on_message(filters.text)
     async def all_messages_handler(client, message):
-        logger.debug(f"all_messages_handler: chat_id={message.chat.id}, chat_type={message.chat.type}, user_id={getattr(message.from_user, 'id', None)}, text={message.text[:50] if message.text else ''}")
+        logger.debug(
+            f"all_messages_handler: chat_id={message.chat.id}, "
+            f"chat_type={message.chat.type}, "
+            f"user_id={getattr(message.from_user, 'id', None)}, "
+            f"text={message.text[:50] if message.text else ''}"
+        )
         try:
-            KEYWORDS = load_keywords_safe(KEYWORDS_FILE)
+            # Загружаем веса ключей и фраз
+            KEYWORDS_FILE = "keyword_weights.json"
+            kw_weights, phrase_weights = load_keyword_weights(KEYWORDS_FILE)
+
             text = message.text or ""
-            matched = smart_find_match(text, KEYWORDS, threshold=FUZZY_THRESHOLD)
+            matched, matches = weighted_score_match(
+                text,
+                kw_weights=kw_weights,
+                phrase_weights=phrase_weights,
+                fuzz_thresh=90,
+                score_threshold=5
+            )
+
             if matched:
-                quality_metrics = analyze_match_quality(text, matched)
-                quality_logger.log_match(text, matched, quality_metrics, is_false_positive=False)
-                logger.info(f"Совпадение: '{matched}' в чате {message.chat.id} ({message.chat.type}) [качество: {quality_metrics['confidence'] if quality_metrics else 'unknown'}]")
+                match_list = ", ".join(matches)
+                logger.info(f"Совпадение ({match_list}) в чате {message.chat.id} ({message.chat.type})")
+
                 notify_text = (
-                    f"🔔 Совпадение по ключу: '{matched}'\n"
+                    f"🔔 Совпадение по ключам/паттернам: {match_list}\n"
                     f"Чат: {message.chat.title or message.chat.id} ({message.chat.type})\n"
                     f"Пользователь: {message.from_user.first_name if message.from_user else 'N/A'}\n"
                     f"Текст:\n{text[:500]}"
                 )
-                if quality_metrics and quality_metrics['confidence'] == 'low':
-                    notify_text += f"\n⚠️ Низкая уверенность в совпадении"
+                # Ссылка на сообщение в приватном чате
                 if str(message.chat.id).startswith("-100") and hasattr(message, "id"):
                     chat_id_num = str(message.chat.id)[4:]
                     notify_text += f"\n[Открыть сообщение](https://t.me/c/{chat_id_num}/{message.id})"
+
                 await client.send_message("me", notify_text, disable_web_page_preview=True)
+
                 try:
                     await client.forward_messages("me", message.chat.id, message.id)
                     logger.debug(f"Переслано сообщение {message.id} из чата {message.chat.id} в избранное.")
                 except ValueError as e:
                     if "Peer id invalid" in str(e):
-                        logger.warning(f"Ошибка пересылки: Peer id invalid ({message.chat.id}). Скорее всего, userbot не состоит в этом чате или Pyrogram не видит его в сессии. Пересылка невозможна. Подробнее: {e}")
+                        logger.warning(
+                            f"Ошибка пересылки: Peer id invalid ({message.chat.id}). "
+                            f"Пользователь-бот не в этом чате. {e}"
+                        )
                     else:
                         logger.warning(f"Ошибка пересылки сообщения: {e}")
                 except Exception as e:
                     logger.warning(f"Неизвестная ошибка пересылки сообщения: {e}")
+
         except Exception as e:
             logger.error(f"Ошибка в обработчике сообщений: {e}")
+
+
+    # --- Закомментированные старые функции поиска ---
+    # def smart_find_match(text, keywords, context="", threshold=85):
+    #     ...
+    # def _validate_match(norm_text, matched_norm, full_context):
+    #     ...
+    # def _is_contextually_relevant(text):
+    #     ...
+    # def analyze_match_quality(text, matched_keyword):
+    #     ...
