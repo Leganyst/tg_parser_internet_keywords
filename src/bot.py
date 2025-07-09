@@ -260,10 +260,9 @@ def register_handlers(app: Client):
     async def all_messages_handler(client, message):
         logger.debug(f"all_messages_handler: chat_id={message.chat.id}, chat_type={message.chat.type}, user_id={getattr(message.from_user, 'id', None)}, text={message.text[:50] if message.text else ''}")
         try:
-            KEYWORDS = load_keywords_safe(KEYWORDS_FILE)
             text = message.text or ""
             # Используем простую функцию поиска
-            matched = simple_keyword_match(text, KEYWORDS, fuzz_threshold=90)
+            matched = simple_keyword_match(text, fuzz_threshold=FUZZY_THRESHOLD)
             if matched:
                 logger.info(f"Совпадение: '{matched}' в чате {message.chat.id} ({message.chat.type})")
                 notify_text = (
