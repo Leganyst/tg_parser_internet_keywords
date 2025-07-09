@@ -195,6 +195,43 @@ def register_handlers(app: Client):
         PENDING_ACTIONS.pop(message.from_user.id, None)
         # далее сообщение не передаётся другим хэндлерам
 
+    @app.on_message(filters.command(["delwords", "delkeys"]) & filters.private & filters.me)
+    async def del_words_init_handler(client, message):
+        """
+        Инициализация удаления нескольких ключевых слов через FSM
+        """
+        PENDING_ACTIONS[message.from_user.id] = 'DEL_WORDS'
+        await message.reply_text(
+            "Пришлите ключевые слова для удаления. "
+            "Можно через запятую или каждое с новой строки."
+        )
+
+    @app.on_message(
+        filters.text & filters.private & filters.me &
+        filters.create(lambda _, __, msg: PENDING_ACTIONS.get(msg.from_user.id) == 'DEL_WORDS')
+    )
+    async def del_words_fsm_handler(client, message):
+        # FSM: обработка удаления нескольких слов
+        text = message.text
+        words = text.replace(",", "\n").splitlines()
+        removed, not_found = [], []
+        for w in words:
+            w = w.strip()
+            if not w:
+                continue
+            if remove_keyword(w, KEYWORDS_FILE):
+                removed.append(w)
+            else:
+                not_found.append(w)
+        reply = []
+        if removed:
+            reply.append(f"Удалены: {', '.join(removed)}")
+        if not_found:
+            reply.append(f"Не найдены: {', '.join(not_found)}")
+        await message.reply_text("\n".join(reply) if reply else "Ничего не удалено.")
+        PENDING_ACTIONS.pop(message.from_user.id, None)
+        # не продолжаем дальше до all_messages_handler
+
     @app.on_message(filters.command("help") & filters.private & filters.me)
     async def help_self_handler(client, message):
         """
