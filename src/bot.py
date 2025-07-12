@@ -298,7 +298,7 @@ def register_handlers(app: Client):
         try:
             text = message.text or ""
             # Используем простую функцию поиска
-            matches = simple_keyword_match(text, fuzz_threshold=FUZZY_THRESHOLD)
+            matches = simple_keyword_match(text)
             if matches:
                 matches_str = ', '.join(matches)
                 logger.info(f"Совпадение ключей: {matches_str} в чате {message.chat.id} ({message.chat.type})")

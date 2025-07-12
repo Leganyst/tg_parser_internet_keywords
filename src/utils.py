@@ -1,71 +1,277 @@
-import spacy
-from rapidfuzz import fuzz
 import re
-from src.keywords import load_keywords  # функция для загрузки списка слов
-from loguru import logger  # Добавлено логирование
-from src.config import KEYWORDS_FILE  # используем конфиг для пути к файлу
+from rapidfuzz import fuzz
+import spacy
+from loguru import logger
+from src.keywords import load_keywords
+from src.config import KEYWORDS_FILE
 
-# Загружаем модель для русского языка
+# Загрузка модели spaCy один раз
 nlp = spacy.load("ru_core_news_sm")
 
+# Семантические группы для ключей; заполните по своему словарю
+RAW_GROUP_MAP = {
+    # === NETWORK ===
+    "интернет":         "network",
+    "сеть":             "network",
+    "сетевой":          "network",
+    "вайфай":           "network",
+    "wi-fi":            "network",
+    "вай-фай":          "network",
+    "роутер":           "network",
+    "модем":            "network",
+    "кабель":           "network",
+    "пинг":             "network",
+    "dns":              "network",
+    "ip":               "network",
+    "подключение":      "network",
+    "локалка":          "network",
+    "инет":             "network",
+    "доступ":           "network",
 
-def simple_keyword_match(text: str, fuzz_threshold: int = 90) -> list[str] | None:
+    # === OPERATOR NAMES ===
+    "ростелеком":       "operator",
+    "ртком":            "operator",
+    "домру":            "operator",
+    "дом.ру":           "operator",
+    "билайн":           "operator",
+    "мтс":              "operator",
+    "мегафон":          "operator",
+    "ттк":              "operator",
+    "юг-линк":          "operator",
+    "йота":             "operator",
+    "инфолинк":         "operator",
+    "интерсвязь":       "operator",
+    "обит":             "operator",
+
+    # === CONNECTION REQUESTS ===
+    "хочу подключить":          "connect",
+    "как подключиться":         "connect",
+    "заявка на подключение":    "connect",
+    "оформить подключение":     "connect",
+    "оформление подключения":   "connect",
+    "можно подключиться":       "connect",
+    "где подключить":           "connect",
+    "куда обращаться":          "connect",
+    "оставить заявку":          "connect",
+    "подключить":               "connect",
+    "подключиться":             "connect",
+    "подключаюсь":              "connect",
+    "подключаю":                "connect",
+    "подключка":                "connect",
+    "сменить провайдера":       "connect",
+    "сменить оператора":        "connect",
+    "ищу альтернативу":         "connect",
+    "перейти на":               "connect",
+    "альтернатива":             "connect",
+    "сравниваю":                "connect",
+    "ищу провайдера":           "connect",
+    "что подключить":           "connect",
+    "переезжаю":                "connect",
+
+    # === COMPLAINTS ===
+    "плохой интернет":          "complaint",
+    "интернет не работает":    "complaint",
+    "нет интернета":            "complaint",
+    "инет лагает":              "complaint",
+    "падает интернет":          "complaint",
+    "низкая скорость":          "complaint",
+    "медленно работает":        "complaint",
+    "частые обрывы":            "complaint",
+    "пропадает связь":          "complaint",
+    "постоянные лаги":          "complaint",
+    "обрывы":                   "complaint",
+    "сбой сети":                "complaint",
+    "нет сигнала":              "complaint",
+    "не грузит":                "complaint",
+    "вообще не работает":       "complaint",
+    "зависает":                 "complaint",
+    "перезагружаю каждый день": "complaint",
+
+    # === OTHER SUPPORT/FORMAL ===
+    "заявка":                   "connect",
+    "адрес":                    "connect",
+    "оставил заявку":           "connect",
+    "заявление":                "connect",
+    "оформление":               "connect",
+    "договор":                  "connect",
+    "поддержка":               "connect",
+    "техподдержка":            "connect",
+}
+
+def normalize_group_map(raw_map: dict[str, str]) -> dict[str, str]:
+    norm_map = {}
+    for word, group in raw_map.items():
+        doc = nlp(word)
+        for token in doc:
+            if token.is_alpha:
+                norm_map[token.lemma_.lower()] = group
+    return norm_map
+
+
+GROUP_MAP = normalize_group_map(RAW_GROUP_MAP)  # RAW_GROUP_MAP — словарь с формами слов
+GROUP_MAP = {
+    " ".join(token.lemma_.lower() for token in nlp(k) if token.is_alpha): v
+    for k, v in GROUP_MAP.items()
+}
+
+SPAM_PATTERNS = [
+    r"\+?\d{7,}",                       # телефон
+    r"https?://\S+",                   # ссылка
+    r"\b\S+@\S+\.\S+\b",               # email
+    r"работа на дому",                 # шаблон вакансии
+    r"работа онлайн",                  # удалёнка
+    r"гибкий график",                  # график
+    r"доход от \d+",                   # замануха деньгами
+    r"по договору",                    # оформление
+    r"требуются менеджеры",            # массовый набор
+    r"ищешь работу мечты",             # шаблон вовлечения
+    r"вступи в мою команду",           # MLM стиль
+    r"заработок без вложений",         # лохотрон
+    r"без вложени[яе]",                # без вложений (гибко)
+    r"без опыта",                      # шаблон оффера
+    r"обучение.*бесплатно",            # обещание обучения
+    r"продажа сплит",                  # реклама
+    r"сплит систем",                   # HVAC техника
+    r"акция",                          # скидки
+    r"успей.*купить",                  # срочность
+    r"забронируй.*место",              # “ограниченное предложение”
+    r"работа в мессенджерах",          # scam recruitment
+    r"ставки на спорт",                # букмекерка
+    r"промокод",                       # акции/мошенничество
+    r"гарантированная премия",         # оффер
+    r"бесплатная регистрация",         # вовлечение
+    r"пенсионерам|студентам|декрете",  # целевые категории
+    r"оплата по факту",                # триггер продаж
+    r"грузоперевозк[аи]",              # услуги перевозки
+    r"домашние переезды",              # то же
+    r"ремонт сантехники",              # шаблонная услуга
+    r"переезды.*расчистка",            # набор услуг
+    r"выезд.*животных",               # логистика/услуги
+    r"заберём передачи",               # логистика
+    r"🛠|🛜|📌|🔥|✅|‼️|📘|📕|🚌|🚚|🚀|🎁",  # эмодзи
+    r"[🅰-🆎🅱️🆘🅾️🆚]",                # “обводки” букв
+    r"(?:работа|подработка)[^.]{0,10}❗", # реклама работы с восклицанием
+]
+
+# Компилируем шаблоны спама один раз для производительности
+SPAM_REGEX = [re.compile(p, flags=re.IGNORECASE) for p in SPAM_PATTERNS]
+
+
+# Пороговые параметры
+FUZZ_THRESH     = 85   # процент для fuzzy
+MIN_MATCHES     = 1    # требуем минимум 1 совпадение ключа
+# требуем минимум 2 семантических групп при групповом фильтре
+MIN_GROUPS      = 2    # из минимум 2 семантических групп
+MAX_TOKEN_DIST  = 10   # расстояние между ключевыми леммами
+
+
+def simple_keyword_match(text: str) -> list[str] | None:
     """
-    Поиск ключевого слова с использованием spaCy:
-    1) Multi-word: ищет точную последовательность лемм
-    2) Single-word: точное совпадение леммы или fuzzy-сравнение лемм
+    Фильтр релевантных сообщений для провайдера:
+      – Отсекает спам-объявления по телефонам/ссылкам
+      – Лемматизирует текст через spaCy
+      – Находит multi-word и single-word ключи (exact & fuzzy)
+      – Требует минимум 2 совпадения из разных групп
+      – Гарантирует, что совпадения близко по контексту (≤ MAX_TOKEN_DIST токенов)
+    
+    Возвращает список найденных оригинальных ключей или None.
     """
     text = str(text)
-    # Загрузка и подготовка ключей внутри функции
+    t_lower = text.lower()
+
+    # 0) Спам-фильтр
+    # Проверяем спам с помощью скомпилированных regex
+    for spam_re in SPAM_REGEX:
+        if spam_re.search(t_lower):
+            logger.debug(f"Отфильтровано как спам по шаблону: {spam_re.pattern}")
+            return None
+        
+    # 1) Подготовка ключей
     raw_keywords = load_keywords(KEYWORDS_FILE)
-    kw_single: dict[str, str] = {}
-    kw_multi: list[tuple[tuple[str,...], str]] = []
+    kw_single = {}   # лемма → оригинал
+    kw_multi  = []   # [(tuple(лемм...), оригинал), ...]
+
     for kw in raw_keywords:
-        doc_kw = nlp(kw)
-        lem_list = tuple(token.lemma_.lower() for token in doc_kw if token.is_alpha)
-        if not lem_list:
+        lemmas = tuple(token.lemma_.lower() for token in nlp(kw) if token.is_alpha)
+        if not lemmas:
             continue
-        if len(lem_list) == 1:
-            kw_single.setdefault(lem_list[0], kw)
+        if len(lemmas) == 1:
+            kw_single.setdefault(lemmas[0], kw)
         else:
-            kw_multi.append((lem_list, kw))
+            kw_multi.append((lemmas, kw))
 
-    doc = nlp(text)
+    # 2) Лемматизация текста
+    doc    = nlp(text)
     lemmas = [token.lemma_.lower() for token in doc if token.is_alpha]
+    
+    # Сопоставляем группы по леммам (и фразам из лемм)
+    matched_groups = set()
+    text_lemmas_str = " ".join(lemmas)
+    for pattern, group in GROUP_MAP.items():
+        if pattern in text_lemmas_str:
+            matched_groups.add(group)
+            
+    matches      = set()
+    groups_found = set()
+    positions    = []
 
-    logger.debug(f"simple_keyword_match: lemmas={lemmas}, fuzz_threshold={fuzz_threshold}")
-
-    # Собираем все найденные ключевые слова
-    matches: set[str] = set()
-
-    # 1) Multi-word
+    # 3) Multi-word match
     for kw_lem, original in kw_multi:
-        if len(kw_lem) > len(lemmas):
+        L = len(kw_lem)
+        if L > len(lemmas):
             continue
-        for i in range(len(lemmas) - len(kw_lem) + 1):
-            window = tuple(lemmas[i : i + len(kw_lem)])
+        for i in range(len(lemmas) - L + 1):
+            window = tuple(lemmas[i: i + L])
             if window == kw_lem:
-                logger.info(f"Found multi-word keyword '{original}' in window {window}")
                 matches.add(original)
+                grp = GROUP_MAP.get(original, "other")
+                groups_found.add(grp)
+                positions.append(i)
+                logger.info(f"Multi-word match '{original}' at pos {i}")
+                break
 
-    # 2) Single-word exact
-    for lemma in lemmas:
+    # 4) Single-word exact match
+    for idx, lemma in enumerate(lemmas):
         if lemma in kw_single:
             original = kw_single[lemma]
-            logger.info(f"Found single-word keyword '{original}' exact match for lemma '{lemma}'")
             matches.add(original)
+            grp = GROUP_MAP.get(original, "other")
+            groups_found.add(grp)
+            positions.append(idx)
+            logger.info(f"Single exact match '{original}' at pos {idx}")
 
-    # 3) Single-word fuzzy
-    for lemma in lemmas:
+    # 5) Single-word fuzzy match (требуем хотя бы два таких совпадения)
+    fuzzy_hits = 0
+    for idx, lemma in enumerate(lemmas):
         for key_lem, original in kw_single.items():
             ratio = fuzz.ratio(lemma, key_lem)
-            if ratio >= fuzz_threshold:
-                logger.info(f"Found fuzzy match keyword '{original}' for lemma '{lemma}' vs key_lemma '{key_lem}', ratio={ratio}")
-                matches.add(original)
+            if ratio >= FUZZ_THRESH:
+                fuzzy_hits += 1
+                if fuzzy_hits > 1:
+                    matches.add(original)
+                    grp = GROUP_MAP.get(original, "other")
+                    groups_found.add(grp)
+                    positions.append(idx)
+                    logger.info(
+                        f"Fuzzy match '{original}' for lemma='{lemma}' "
+                        f"vs key='{key_lem}', ratio={ratio} at pos {idx}"
+                    )
+                break
 
-    # Проверяем количество найденных ключевых слов
-    if len(matches) >= 2:
-        logger.info(f"Total keywords matched: {len(matches)} -> {matches}")
+    # 6) Финальный фильтр
+    # Итоговый фильтр: два пути к принятию сообщения
+    # 1) Достаточно прямых совпадений ключевых слов
+    if len(matches) >= MIN_MATCHES:
+        logger.info(f"Прямые совпадения: matches={matches}")
         return list(matches)
-    logger.debug(f"Недостаточно совпадений ключевых слов ({len(matches)}): {matches}")
+    # 2) Достаточно семантических групп и близость по позиции
+    if len(matched_groups) >= MIN_GROUPS and len(groups_found) >= MIN_GROUPS \
+       and positions and (max(positions) - min(positions) <= MAX_TOKEN_DIST):
+        logger.info(
+            f"Семантический фильтр: matched_groups={matched_groups}, "
+            f"groups_found={groups_found}, positions={positions}"
+        )
+        return list(matches)
+    # В остальных случаях отклоняем
+    logger.debug(f"Отклонено: matches={matches}, matched_groups={matched_groups}, groups_found={groups_found}, positions={positions}")
     return None
