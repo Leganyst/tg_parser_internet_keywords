@@ -107,12 +107,7 @@ def normalize_group_map(raw_map: dict[str, str]) -> dict[str, str]:
                 norm_map[token.lemma_.lower()] = group
     return norm_map
 
-
 GROUP_MAP = normalize_group_map(RAW_GROUP_MAP)  # RAW_GROUP_MAP — словарь с формами слов
-GROUP_MAP = {
-    " ".join(token.lemma_.lower() for token in nlp(k) if token.is_alpha): v
-    for k, v in GROUP_MAP.items()
-}
 
 SPAM_PATTERNS = [
     r"\+?\d{7,}",                       # телефон
