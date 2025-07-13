@@ -1,7 +1,7 @@
 from pyrogram import Client, filters
 from loguru import logger
-from src.config import API_ID, API_HASH, OWNER_ID, KEYWORDS_FILE, FUZZY_THRESHOLD
-from src.keywords import load_keywords, add_keyword, remove_keyword
+from src.config import API_ID, API_HASH, OWNER_ID, KEYWORDS_FILE, FUZZY_THRESHOLD, SPAM_FILE
+from src.keywords import load_keywords, add_keyword, remove_keyword, load_spam_patterns, add_spam_pattern, remove_spam_pattern
 from src.utils import simple_keyword_match
 import sys
 import logging
@@ -94,6 +94,106 @@ def register_handlers(app: Client):
                 await message.reply_text(chunk_text)
         else:
             await message.reply_text(full_text)
+
+    @app.on_message(filters.command("showspam") & filters.create(owner_filter))
+    async def show_spam_handler(client, message):
+        """Показать все спам-шаблоны"""
+        patterns = load_spam_patterns(SPAM_FILE)
+        if not patterns:
+            await message.reply_text("Список спам-шаблонов пуст.")
+            return
+        text = "🛑 Шаблоны спама:\n" + "\n".join(f"{i+1}. {p}" for i,p in enumerate(patterns))
+        await message.reply_text(text)
+    
+    @app.on_message(filters.command(["addspam"]) & filters.private & filters.me)
+    async def add_spam_self_handler(client, message):
+        # Одиночное добавление спам-шаблона
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply_text("Укажите шаблон спама после команды.\nПример: /addspam .*spam.*")
+            return
+        pattern = parts[1].strip()
+        if add_spam_pattern(pattern, SPAM_FILE):
+            await message.reply_text(f"Шаблон спама '{pattern}' добавлен.")
+        else:
+            await message.reply_text("Такой шаблон уже есть или пустая строка.")
+
+    @app.on_message(filters.command(["delspam"]) & filters.private & filters.me)
+    async def del_spam_self_handler(client, message):
+        # Одиночное удаление спам-шаблона
+        parts = message.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await message.reply_text("Укажите шаблон спама после команды.\nПример: /delspam .*spam.*")
+            return
+        pattern = parts[1].strip()
+        if remove_spam_pattern(pattern, SPAM_FILE):
+            await message.reply_text(f"Шаблон спама '{pattern}' удалён.")
+        else:
+            await message.reply_text("Шаблон не найден.")
+
+    @app.on_message(filters.command(["addspams"]) & filters.private & filters.me)
+    async def add_spams_init_handler(client, message):
+        # Инициализация FSM для добавления нескольких спам-шаблонов
+        PENDING_ACTIONS[message.from_user.id] = 'ADD_SPAMS'
+        await message.reply_text(
+            "Пришлите шаблоны спама для добавления. Можно через запятую или каждую с новой строки."
+        )
+
+    @app.on_message(
+        filters.text & filters.private & filters.me &
+        filters.create(lambda _, __, m: PENDING_ACTIONS.get(m.from_user.id) == 'ADD_SPAMS')
+    )
+    async def add_spams_fsm_handler(client, message):
+        # FSM: обработка добавления нескольких шаблонов спама
+        patterns = message.text.replace(",", "\n").splitlines()
+        added, skipped = [], []
+        for p in patterns:
+            p = p.strip()
+            if not p:
+                continue
+            if add_spam_pattern(p, SPAM_FILE):
+                added.append(p)
+            else:
+                skipped.append(p)
+        reply = []
+        if added:
+            reply.append(f"Добавлены: {', '.join(added)}")
+        if skipped:
+            reply.append(f"Пропущены (уже есть/пусто): {', '.join(skipped)}")
+        await message.reply_text("\n".join(reply) if reply else "Ничего не добавлено.")
+        PENDING_ACTIONS.pop(message.from_user.id, None)
+
+    @app.on_message(filters.command(["delspams"]) & filters.private & filters.me)
+    async def del_spams_init_handler(client, message):
+        # Инициализация FSM для удаления нескольких спам-шаблонов
+        PENDING_ACTIONS[message.from_user.id] = 'DEL_SPAMS'
+        await message.reply_text(
+            "Пришлите шаблоны спама для удаления. Можно через запятую или каждую с новой строки."
+        )
+
+    @app.on_message(
+        filters.text & filters.private & filters.me &
+        filters.create(lambda _, __, m: PENDING_ACTIONS.get(m.from_user.id) == 'DEL_SPAMS')
+    )
+    async def del_spams_fsm_handler(client, message):
+        # FSM: обработка удаления нескольких шаблонов спама
+        patterns = message.text.replace(",", "\n").splitlines()
+        removed, not_found = [], []
+        for p in patterns:
+            p = p.strip()
+            if not p:
+                continue
+            if remove_spam_pattern(p, SPAM_FILE):
+                removed.append(p)
+            else:
+                not_found.append(p)
+        reply = []
+        if removed:
+            reply.append(f"Удалены: {', '.join(removed)}")
+        if not_found:
+            reply.append(f"Не найдены: {', '.join(not_found)}")
+        await message.reply_text("\n".join(reply) if reply else "Ничего не удалено.")
+        PENDING_ACTIONS.pop(message.from_user.id, None)
 
     @app.on_message(filters.command(["addword", "addkey"]) & filters.private & filters.me)
     async def add_word_self_handler(client, message):
@@ -238,15 +338,23 @@ def register_handlers(app: Client):
         Справка по командам userbot.
         """
         help_text = (
-            "Userbot: управление ключевыми словами через команды в избранных (Saved Messages) или в личке от себя.\n\n"
+            "Userbot: управление ключевыми словами и спам-шаблонами через команды в личке от себя.\n\n"
             "📝 Управление ключевыми словами:\n"
             "/addword <слово> — добавить одно ключевое слово\n"
             "/delword <слово> — удалить одно ключевое слово\n"
             "/addwords — начать добавление нескольких ключевых слов\n"
-            "   (в следующем сообщении через запятую или каждое слово с новой строки)\n"
+            "    (после команды пришлите список через запятую или с новой строки)\n"
             "/delwords — начать удаление нескольких ключевых слов\n"
-            "   (в следующем сообщении через запятую или каждое слово с новой строки)\n"
+            "    (после команды пришлите список через запятую или с новой строки)\n"
             "/showwords — показать все ключевые слова\n\n"
+            "🚫 Управление спам-шаблонами:\n"
+            "/addspam <шаблон> — добавить шаблон спама\n"
+            "/delspam <шаблон> — удалить шаблон спама\n"
+            "/addspams — начать добавление нескольких шаблонов спама\n"
+            "    (после команды пришлите список через запятую или с новой строки)\n"
+            "/delspams — начать удаление нескольких шаблонов спама\n"
+            "    (после команды пришлите список через запятую или с новой строки)\n"
+            "/showspam — показать все шаблоны спама\n\n"
             "📊 Мониторинг качества:\n"
             "/stats — показать статистику качества совпадений\n"
             "/clear_stats — очистить статистику\n\n"
