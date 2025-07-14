@@ -41,7 +41,7 @@ SPAM_REGEX = [re.compile(p, flags=re.IGNORECASE) for p in SPAM_PATTERNS]
 
 # Пороговые параметры
 FUZZ_THRESH     = 85   # процент для fuzzy
-MIN_MATCHES     = 2    # требуем минимум 2 совпадения ключей для прямого прохода
+MIN_MATCHES     = 1    # требуем минимум 2 совпадения ключей для прямого прохода
 # требуем минимум 2 семантических групп при групповом фильтре
 MIN_GROUPS      = 2    # из минимум 2 семантических групп
 MAX_TOKEN_DIST  = 10   # расстояние между ключевыми леммами
@@ -50,132 +50,106 @@ MAX_TOKEN_DIST  = 10   # расстояние между ключевыми ле
 def simple_keyword_match(text: str) -> list[str] | None:
     """
     Фильтр релевантных сообщений для провайдера:
-      – Отсекает спам-объявления по телефонам/ссылкам
-      – Лемматизирует текст через spaCy
-      – Находит multi-word и single-word ключи (exact & fuzzy)
-      – Требует минимум 2 совпадения из разных групп
-      – Гарантирует, что совпадения близко по контексту (≤ MAX_TOKEN_DIST токенов)
-    
-    Возвращает список найденных оригинальных ключей или None.
+      – Спам-фильтр
+      – Лемматизация через spaCy
+      – Multi-word и single-word exact & fuzzy match
+      – Relaxed direct accept по одному ключу + семантика «network»
+      – Семантический фильтр по группам и расстоянию
+      – Ранний semantic shortcut «network + connect/complaint»
     """
     text = str(text)
     t_lower = text.lower()
 
     # 0) Спам-фильтр
-    # Проверяем спам с помощью скомпилированных regex
     for spam_re in SPAM_REGEX:
         if spam_re.search(t_lower):
-            logger.debug(f"Отфильтровано как спам по шаблону: {spam_re.pattern}")
+            logger.debug(f"Отфильтровано как спам: {spam_re.pattern}")
             return None
-        
-    # 1) Подготовка ключей
-    raw_keywords = load_keywords(KEYWORDS_FILE)
-    kw_single = {}   # лемма → оригинал
-    kw_multi  = []   # [(tuple(лемм...), оригинал), ...]
 
+    # 1) Загружаем ключи
+    raw_keywords = load_keywords(KEYWORDS_FILE)
+    kw_single, kw_multi = {}, []
     for kw in raw_keywords:
-        lemmas = tuple(token.lemma_.lower() for token in nlp(kw) if token.is_alpha)
-        if not lemmas:
-            continue
+        lemmas = tuple(tok.lemma_.lower() for tok in nlp(kw) if tok.is_alpha)
         if len(lemmas) == 1:
             kw_single.setdefault(lemmas[0], kw)
-        else:
+        elif lemmas:
             kw_multi.append((lemmas, kw))
 
-    # 2) Лемматизация текста
+    # 2) Лемматизируем вход
     doc    = nlp(text)
-    lemmas = [token.lemma_.lower() for token in doc if token.is_alpha]
-    
-    # Сопоставляем семантические группы: сначала многословные, затем одиночные
+    lemmas = [tok.lemma_.lower() for tok in doc if tok.is_alpha]
+
+    # 3) Собираем matched_groups
     matched_groups = set()
-    # многословные группы
-    for lem_pat, group in MULTI_GROUP_PATTERNS:
-        L = len(lem_pat)
-        if L > len(lemmas):
-            continue
+    #   3a) multi-word группы
+    for pat, grp in MULTI_GROUP_PATTERNS:
+        L = len(pat)
         for i in range(len(lemmas) - L + 1):
-            if tuple(lemmas[i: i + L]) == lem_pat:
-                matched_groups.add(group)
+            if tuple(lemmas[i : i + L]) == pat:
+                matched_groups.add(grp)
                 break
-    # одиночные группы
-    for lemma in lemmas:
-        grp = SINGLE_GROUP_MAP.get(lemma)
-        if grp:
-            matched_groups.add(grp)
-            
-    matches      = set()
-    groups_found = set()
-    positions    = []
+    #   3b) single-word группы
+    for lm in lemmas:
+        if lm in SINGLE_GROUP_MAP:
+            matched_groups.add(SINGLE_GROUP_MAP[lm])
 
-    # 3) Multi-word match
-    for kw_lem, original in kw_multi:
-        L = len(kw_lem)
-        if L > len(lemmas):
-            continue
+    matches, groups_found, positions = set(), set(), []
+
+    # 4) Multi-word exact match
+    for kw_pat, orig in kw_multi:
+        L = len(kw_pat)
         for i in range(len(lemmas) - L + 1):
-            window = tuple(lemmas[i: i + L])
-            if window == kw_lem:
-                matches.add(original)
-                # Группа найденного ключевого шаблона по JSON-мапе
-                grp = _raw_map.get(original, "other")
-                groups_found.add(grp)
+            if tuple(lemmas[i : i + L]) == kw_pat:
+                matches.add(orig)
+                groups_found.add(_raw_map.get(orig, "other"))
                 positions.append(i)
-                logger.info(f"Multi-word match '{original}' at pos {i}")
                 break
 
-    # 4) Single-word exact match
-    for idx, lemma in enumerate(lemmas):
-        if lemma in kw_single:
-            original = kw_single[lemma]
-            matches.add(original)
-            # Группа для одиночного слова
-            grp = _raw_map.get(original, "other")
-            groups_found.add(grp)
+    # 5) Single-word exact match
+    for idx, lm in enumerate(lemmas):
+        if lm in kw_single:
+            orig = kw_single[lm]
+            matches.add(orig)
+            groups_found.add(_raw_map.get(orig, "other"))
             positions.append(idx)
-            logger.info(f"Single exact match '{original}' at pos {idx}")
 
-    # 5) Single-word fuzzy match (требуем хотя бы два таких совпадения)
-    fuzzy_hits = 0
-    for idx, lemma in enumerate(lemmas):
-        for key_lem, original in kw_single.items():
-            ratio = fuzz.ratio(lemma, key_lem)
-            if ratio >= FUZZ_THRESH:
-                fuzzy_hits += 1
-                if fuzzy_hits > 1:
-                    matches.add(original)
-                    # Группа для fuzzy-совпадения
-                    grp = _raw_map.get(original, "other")
-                    groups_found.add(grp)
-                    positions.append(idx)
-                    logger.info(
-                        f"Fuzzy match '{original}' for lemma='{lemma}' "
-                        f"vs key='{key_lem}', ratio={ratio} at pos {idx}"
-                    )
+    # 6) Single-word fuzzy match
+    for idx, lm in enumerate(lemmas):
+        for key_lem, orig in kw_single.items():
+            if fuzz.ratio(lm, key_lem) >= FUZZ_THRESH:
+                # сразу принимаем один сильный fuzzy-match
+                matches.add(orig)
+                groups_found.add(_raw_map.get(orig, "other"))
+                positions.append(idx)
                 break
 
-    # 6) Финальный фильтр
-    # Итоговый фильтр: два пути к принятию сообщения
-    # 1) Достаточно прямых совпадений ключевых слов
-    if len(matches) >= MIN_MATCHES and 'network' in groups_found:
-        logger.info(f"Direct accept: matches={matches}, groups_found={groups_found}")
+    # DEBUG после матчей
+    logger.debug(f"After matching: matches={matches}, "
+                 f"matched_groups={matched_groups}, "
+                 f"groups_found={groups_found}, positions={positions}")
+
+    # 7) Relaxed direct accept:
+    #    достаточно одного match + упоминание «network» в семантике
+    if matches and 'network' in matched_groups:
+        logger.info(f"Direct accept (relaxed): {matches}")
         return list(matches)
-    # 2) Достаточно семантических групп и близость по позиции
-    if len(matched_groups) >= MIN_GROUPS and len(groups_found) >= MIN_GROUPS \
-       and positions and (max(positions) - min(positions) <= MAX_TOKEN_DIST):
-        logger.info(
-            f"Семантический фильтр: matched_groups={matched_groups}, "
-            f"groups_found={groups_found}, positions={positions}"
-        )
+
+    # 8) Семантический фильтр по группам + позиции
+    if (len(matched_groups) >= MIN_GROUPS and
+        len(groups_found) >= MIN_GROUPS and
+        positions and
+        max(positions) - min(positions) <= MAX_TOKEN_DIST):
+        logger.info("Semantic positional accept")
         return list(matches)
-    # В остальных случаях отклоняем
-    logger.debug(f"Отклонено: matches={matches}, matched_groups={matched_groups}, groups_found={groups_found}, positions={positions}")
-    
-    # (перед последним return None)
-    #  — если в тексте одновременно найдены две группы: сеть и запрос на подключение/жалобу,
-    #    но не было точных matches, принимаем.
-    if {"network", "connect"} <= matched_groups or {"network", "complaint"} <= matched_groups:
-        logger.info(f"Semantic shortcut: {matched_groups} → accept")
+
+    # 9) Semantic shortcut (ранний):
+    #    если есть одновременно network+connect или network+complaint
+    if ({'network','connect'}.issubset(matched_groups) or
+        {'network','complaint'}.issubset(matched_groups)):
+        logger.info(f"Semantic shortcut applied: {matched_groups}")
         return list(matched_groups)
 
-    # Без совпадений групп и ключей отклоняем
+    # 10) Отклоняем
+    logger.debug("Rejected")
     return None
