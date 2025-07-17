@@ -150,9 +150,13 @@ def simple_keyword_match(text: str) -> list[str] | None:
 
     # 6) Финальный фильтр
     # Итоговый фильтр: два пути к принятию сообщения
-    # 1) Direct accept (strict): есть match И семантика «network»+«connect»
+    # 1) Direct accept (strict): есть match и семантика «network»+«connect»
     if matches and {'network','connect'}.issubset(matched_groups):
         logger.info(f"Direct accept (strict): matches={matches}, matched_groups={matched_groups}")
+        return list(matches)
+    # 1b) Direct accept for operator mentions
+    if matches and 'operator' in groups_found:
+        logger.info(f"Direct operator accept: matches={matches}, groups_found={groups_found}")
         return list(matches)
     # 2) Ранний semantic shortcut: если явная семантика «network+connect»
     if {'network','connect'}.issubset(matched_groups):
